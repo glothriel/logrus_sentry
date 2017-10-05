@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/getsentry/raven-go"
 	pkgerrors "github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -144,6 +144,32 @@ func TestSentryWithClient(t *testing.T) {
 	})
 }
 
+func TestSentryWithClientAndError(t *testing.T) {
+	WithTestDSN(t, func(dsn string, pch <-chan *resultPacket) {
+		logger := getTestLogger()
+
+		client, _ := raven.New(dsn)
+
+		hook, err := NewWithClientSentryHook(client, []logrus.Level{
+			logrus.ErrorLevel,
+		})
+		if err != nil {
+			t.Fatal(err.Error())
+		}
+		logger.Hooks.Add(hook)
+
+		errorMsg := "error message"
+		logger.WithError(errors.New(errorMsg)).Error(message)
+		packet := <-pch
+		if packet.Message != message {
+			t.Errorf("message should have been %s, was %s", message, packet.Message)
+		}
+		if packet.Culprit != errorMsg {
+			t.Errorf("culprit should have been %s, was %s", errorMsg, packet.Culprit)
+		}
+	})
+}
+
 func TestSentryTags(t *testing.T) {
 	WithTestDSN(t, func(dsn string, pch <-chan *resultPacket) {
 		logger := getTestLogger()
@@ -222,7 +248,7 @@ func TestSentryStacktrace(t *testing.T) {
 		hook.StacktraceConfiguration.Enable = true
 
 		logger.Error(message) // this is the call that the last frame of stacktrace should capture
-		expectedLineno := 224 //this should be the line number of the previous line
+		expectedLineno := 250 //this should be the line number of the previous line
 		packet = <-pch
 		stacktraceSize = len(packet.Stacktrace.Frames)
 		if stacktraceSize == 0 {
@@ -240,7 +266,7 @@ func TestSentryStacktrace(t *testing.T) {
 			t.Error("Frame should not be identified as in_app without prefixes")
 		}
 
-		hook.StacktraceConfiguration.InAppPrefixes = []string{"github.com/Sirupsen/logrus"}
+		hook.StacktraceConfiguration.InAppPrefixes = []string{"github.com/sirupsen/logrus"}
 		hook.StacktraceConfiguration.Context = 2
 		hook.StacktraceConfiguration.Skip = 2
 
@@ -251,7 +277,7 @@ func TestSentryStacktrace(t *testing.T) {
 			t.Error("Stacktrace should not be empty")
 		}
 		lastFrame = packet.Stacktrace.Frames[stacktraceSize-1]
-		expectedFilename := "github.com/Sirupsen/logrus/entry.go"
+		expectedFilename := "github.com/sirupsen/logrus/entry.go"
 		if lastFrame.Filename != expectedFilename {
 			t.Errorf("File name should have been %s, was %s", expectedFilename, lastFrame.Filename)
 		}
@@ -274,7 +300,7 @@ func TestSentryStacktrace(t *testing.T) {
 		if packet.Exception.Stacktrace != nil {
 			frames = packet.Exception.Stacktrace.Frames
 		}
-		expectedCulprit := "myStacktracerError!"
+		expectedCulprit := "wrapped: myStacktracerError!"
 		if packet.Culprit != expectedCulprit {
 			t.Errorf("Expected culprit of '%s', got '%s'", expectedCulprit, packet.Culprit)
 		}
@@ -299,6 +325,16 @@ func TestSentryStacktrace(t *testing.T) {
 		if !strings.HasSuffix(frames[0].Filename, expectedPkgErrorsStackTraceFilename) {
 			t.Error("Stacktrace should be taken from err if it implements the pkgErrorStackTracer interface")
 		}
+
+		// zero stack frames
+		defer func() {
+			if err := recover(); err != nil {
+				t.Error("Zero stack frames should not cause panic")
+			}
+		}()
+		hook.StacktraceConfiguration.Skip = 1000
+		logger.Error(message)
+		<-pch // check panic
 	})
 }
 
